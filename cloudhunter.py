@@ -43,10 +43,9 @@ azureCloud = {
 }
 
 class Bucket(object):
-    state=''
-    details=''
-
     def __init__(self, url, name='Generic'):
+        self.state = ''
+        self.details = []
         self.url = url
         self.name = name
 
@@ -54,19 +53,21 @@ class Bucket(object):
             if(response == False): return
             if response.status_code == 200:
                 self.state = 'OPEN'
-            elif response.status_code == 403:
+            elif response.status_code in [401, 403]:
                 self.state = 'PRIVATE'
-            elif response.status_code in [301, 302]:
-                self.state = 'REDIRECT'
-                self.details = response.url
+            else:
+                self.state = '{} ?'.format(response.status_code)
+            if(len(response.history) != 0 and response.history[0].status_code in [301, 302]):
+                self.details.append('Redirect ' + response.url)
 
     def echo(self):
-        print('{}{:<20}\t{:<32}\t{:<7}\t {}'.format(' ' * 4, self.name, self.url, self.state, ','.join(self.details)))
+        print('{}{:<20}\t{:<42}\t{:<8}\t {}'.format(' ' * 4, self.name, self.url, self.state, ','.join(self.details)))
 
 
 def check_dns(hostname):
     try:
-        socket.gethostbyname(hostname)
+        ip = socket.gethostbyname(hostname)
+        if ip in ['0.0.0.0', '127.0.0.1']: return False
         return True
     except socket.error:
         return False
