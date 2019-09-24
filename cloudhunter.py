@@ -24,9 +24,9 @@ awsCloud = {
 azureCloud = {
     'Microsoft Hosted Domain':'onmicrosoft.com',
     'App Services - Management':'scm.azurewebsites.net',
-    'App Services':'azurewebsites.net',
-    'App Services':'p.azurewebsites.net',
-    'App Services':'cloudapp.net',
+    'App Services - Azure':'azurewebsites.net',
+    'App Services - Web':'p.azurewebsites.net',
+    'App Services - CloudApp':'cloudapp.net',
     'Storage Accounts - Files':'file.core.windows.net',
     'Storage Accounts - Blobs':'blob.core.windows.net',
     'Storage Accounts - Queues':'queue.core.windows.net',
@@ -138,6 +138,7 @@ def get_google_rights(name):
         if 'storage.buckets.setIamPolicy' in rights['permissions']:
             desc.append('Vulnerable!')
         return desc, rights['permissions']
+    return desc, ''
 
 
 def show_banner():
