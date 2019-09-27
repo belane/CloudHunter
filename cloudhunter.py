@@ -2,80 +2,193 @@
 # -*- coding: utf-8 -*-
 #
 # CloudHunter
-# Version: 0.3
+# Version: 0.4
 
 import sys
 import socket
 import requests
+import argparse
 import json
+try:
+    import boto3
+except ImportError:
+    print('Install boto3 for full AWS support.')
 from queue import Queue
 from threading import Thread
+from enum import Enum
 
-
-verbose = False
-show_open_only = False
 
 googleCloud = {
-    'Google Storage':'storage.googleapis.com',
-    'Google App Engine':'appspot.com'
+    'Google Storage': 'storage.googleapis.com',
+    'Google App Engine': 'appspot.com'
 }
 
 awsCloud = {
-    'AWS Bucket':'s3.amazonaws.com'
+    'AWS Bucket': 's3.amazonaws.com'
 }
 
 azureCloud = {
-    'Microsoft Hosted Domain':'onmicrosoft.com',
-    'App Services - Management':'scm.azurewebsites.net',
-    'App Services - Azure':'azurewebsites.net',
-    'App Services - Web':'p.azurewebsites.net',
-    'App Services - CloudApp':'cloudapp.net',
-    'Storage Accounts - Files':'file.core.windows.net',
-    'Storage Accounts - Blobs':'blob.core.windows.net',
-    'Storage Accounts - Queues':'queue.core.windows.net',
-    'Storage Accounts - Tables':'table.core.windows.net',
-    'Email':'mail.protection.outlook.com',
-    'SharePoint':'sharepoint.com',
-    'Databases-Redis':'redis.cache.windows.net',
-    'Databases-Cosmos DB':'documents.azure.com',
-    'Databases-MSSQL':'database.windows.net',
-    'Key Vaults':'vault.azure.net',
-    'Azure CDN':'azureedge.net',
-    'Search Appliance':'search.windows.net',
-    'API Services':'azure-api.net'
+    'Storage Files': 'file.core.windows.net',
+    'Storage Blobs': 'blob.core.windows.net',
+    'Storage Queues': 'queue.core.windows.net',
+    'Storage Tables': 'table.core.windows.net',
+    'App Management': 'scm.azurewebsites.net',
+    'App Azure': 'azurewebsites.net',
+    'App Web': 'p.azurewebsites.net',
+    'CloudApp': 'cloudapp.net',
+    'Key Vaults': 'vault.azure.net',
+    'Azure CDN': 'azureedge.net',
+    'Search Appliance': 'search.windows.net',
+    'API Services': 'azure-api.net',
+    'Hosted Domain': 'onmicrosoft.com',
+    'Databases-Redis': 'redis.cache.windows.net',
+    'Databases-CosmosDB': 'documents.azure.com',
+    'Databases-MSSQL': 'database.windows.net',
+    'Email': 'mail.protection.outlook.com',
+    'SharePoint': 'sharepoint.com'
 }
 
+
+class State(Enum):
+    CLOSE = 'CLOSE'
+    DOMAIN = 'DOMAIN'
+    PRIVATE = 'PRIVATE'
+    OPEN = 'OPEN'
+    UNKNOWN = 'UNKNOWN'
+
+
+class Risk(Enum):
+    LOW = 0
+    MEDIUM = 34
+    HIGH = 31
+
+
 class Bucket(object):
-    def __init__(self, url, name='Generic'):
-        self.state = ''
-        self.details = []
-        self.url = url
+    def __init__(self, name, domain, cloud='Generic', srv_name='Generic'):
         self.name = name
+        self.domain = domain
+        self.cloud = cloud
+        self.srv_name = srv_name
+        self.state = State.CLOSE
+        self.risk = Risk.LOW
+        self.details = []
 
     def process_status(self, response):
-            if(response == False): return
+        if(response == False):
+            self.state = State.DOMAIN
+            return
+        elif response.status_code == 200:
+            self.state = State.OPEN
+            self.risk = Risk.MEDIUM
+        elif response.status_code in [400, 401, 403]:
+            self.state = State.PRIVATE
+        elif response.status_code in [500, 502, 503]:
+            self.state = State.OPEN
+            self.risk = Risk.MEDIUM
+            self.details.append('WebApp Error')
+        else:
+            self.state = State.UNKNOWN
+            self.risk = Risk.MEDIUM
+            self.details.append('Response: {}'.format(response.status_code))
 
-            if response.status_code == 200:
-                self.state = 'OPEN'
-            elif response.status_code in [401, 403]:
-                self.state = 'PRIVATE'
-            elif response.status_code in [500, 502, 503]:
-                self.state = 'OPEN'
-                self.details.append('Server error')
-            else:
-                self.state = response.status_code
+        if self.name == base_name:
+            self.risk = Risk.MEDIUM
 
-            if(len(response.history) != 0 and response.history[0].status_code in [301, 302]):
-                self.details.append('Redirect ' + response.url)
+        if(len(response.history) != 0 and response.history[0].status_code in [301, 302]):
+            self.details.append('Redirects ' + response.url)
+
+        self.process_rights()
 
     def echo(self):
-        print('{}{:<20}\t{:<42}\t{:<8}\t {}'.format(' ' * 4, self.name, self.url, self.state, ','.join(self.details)))
+        print('\033[0;{}m{}{:<22}{:<42}\t{:<10}{}\033[0;0m'.format(
+            self.risk.value, ' ' * 4, self.srv_name, self.domain, self.state.value, ' | '.join(self.details)))
+
+        if verbose and hasattr(self, 'acl'):
+            print(json.dumps(self.acl, indent=4))
+
+    def process_rights(self):
+        if self.state != State.OPEN:
+            return
+        if self.cloud == 'google':
+            self._google_acl()
+        elif self.cloud == 'aws':
+            self._aws_acl()
+        elif self.cloud == 'azure':
+            self._azure_acl()
+
+    def _azure_acl(self):
+        #azure_api = 'https://{}.blob.core.windows.net/{}?restype=container&comp=acl'.format(self.name,self.name)
+        #remote_acl = requests.get(azure_api)
+        # print(remote_acl)
+        pass
+
+    def _google_acl(self):
+        google_api = 'https://www.googleapis.com/storage/v1/b/{}/iam/testPermissions?permissions=storage.buckets.delete&permissions=storage.buckets.get&permissions=storage.buckets.getIamPolicy&permissions=storage.buckets.setIamPolicy&permissions=storage.buckets.update&permissions=storage.objects.create&permissions=storage.objects.delete&permissions=storage.objects.get&permissions=storage.objects.list&permissions=storage.objects.update'.format(
+            self.name)
+        remote_acl = requests.get(google_api).json()
+
+        if remote_acl.get('permissions'):
+            self.acl = remote_acl['permissions']
+            user = 'AllUsers'
+            symb = ''
+
+            if 'storage.objects.list' in self.acl:
+                symb += 'L'
+            if 'storage.objects.get' in self.acl:
+                symb += 'R'
+            if 'storage.objects.create' in self.acl or \
+                'storage.objects.delete' in self.acl or \
+                    'storage.objects.update' in self.acl:
+                self.risk = Risk.HIGH
+                symb += 'W'
+            if 'storage.buckets.setIamPolicy' in self.acl:
+                self.risk = Risk.HIGH
+                symb += 'V'
+
+            self.details.append('{} [{}]'.format(user, symb))
+
+    def _aws_acl(self):
+        try:
+            s3 = boto3.client('s3')
+            remote_acl = s3.get_bucket_acl(Bucket=self.name)
+            if 'Grants' in remote_acl:
+                self.acl = remote_acl['Grants']
+                rights = {}
+
+                for right in self.acl:
+                    if right['Grantee']['Type'] == 'CanonicalUser' and 'DisplayName' in right['Grantee']:
+                        user = right['Grantee']['DisplayName']
+                    elif right['Grantee']['Type'] == 'Group':
+                        user = right['Grantee']['URI'].split('/')[-1]
+                    else:
+                        user = right['Grantee']['ID'][:8]
+
+                    if right['Permission'] == 'READ' or right['Permission'] == 'READ_ACP':
+                        symb = 'R'
+                    elif right['Permission'] == 'WRITE' or right['Permission'] == 'WRITE_ACL':
+                        self.risk = Risk.HIGH
+                        symb = 'W'
+                    elif right['Permission'] == 'FULL_CONTROL':
+                        self.risk = Risk.HIGH
+                        symb = 'F'
+
+                    if user not in rights:
+                        rights[user] = symb
+                    elif symb not in rights[user]:
+                        rights[user] += symb
+
+                for user, symb in rights.items():
+                    self.details.append('{} [{}]'.format(user, symb))
+
+        except:
+            pass
 
 
 def check_dns(hostname):
     try:
         ip = socket.gethostbyname(hostname)
-        if ip in ['0.0.0.0', '127.0.0.1']: return False
+        if ip in ['0.0.0.0', '127.0.0.1']:
+            return False
         return True
     except socket.error:
         return False
@@ -86,57 +199,36 @@ def check_host(host):
         response = requests.get('http://' + host)
     except:
         return False
-    if response.status_code in [400, 404]: return False
+    if response.status_code in [404]:
+        return False
     return response
 
 
-def generate_permutations(name, dict_file):
+def generate_permutations(base_name, dict_file):
     p = []
-    p.append(name)
+    p.append(base_name)
+    rules = ['{}-{}', '{}.{}', '{}{}']
+
     with open(dict_file, 'r') as f:
         lines = f.read().splitlines()
-        for l in lines:
-            p.append('{}-{}'.format(l, name))
-            p.append('{}.{}'.format(l, name))
-            p.append('{}{}'.format(l, name))
-            p.append('{}-{}'.format(name, l))
-            p.append('{}.{}'.format(name, l))
-            p.append('{}{}'.format(name, l))
+        for affix in lines:
+            p += [x.format(affix, base_name) for x in rules]
+            p += [x.format(base_name, affix) for x in rules]
+
     return p
 
 
-def get_google_rights(name):
-    desc = []
-    google_api = 'https://www.googleapis.com/storage/v1/b/{}/iam/testPermissions?permissions=storage.buckets.delete&permissions=storage.buckets.get&permissions=storage.buckets.getIamPolicy&permissions=storage.buckets.setIamPolicy&permissions=storage.buckets.update&permissions=storage.objects.create&permissions=storage.objects.delete&permissions=storage.objects.get&permissions=storage.objects.list&permissions=storage.objects.update'.format(name)
-    rights = requests.get(google_api).json()
- 
-    if rights.get('permissions'):
-        if 'storage.objects.list' in rights['permissions']:
-            desc.append('List')
-        if 'storage.objects.get' in rights['permissions']:
-            desc.append('Read')
-        if 'storage.objects.create' in rights['permissions'] or \
-            'storage.objects.delete' in rights['permissions'] or \
-            'storage.objects.update' in rights['permissions']:
-            desc.append('Write')
-        if 'storage.buckets.setIamPolicy' in rights['permissions']:
-            desc.append('Vulnerable!')
-        return desc, rights['permissions']
-    return desc, ''
-
-
-def check_cloud(cloud, names, type='default'):
+def check_cloud(cloud_dict, names, cloud='default'):
     q = Queue(maxsize=0)
-    num_threads = 10
     results = []
 
-    for srv, url in cloud.items():
-        for p in names:
-            query = '{}.{}'.format(p, url)
-            q.put((srv, query, p))
+    for srv_name, srv_url in cloud_dict.items():
+        for name in names:
+            domain = '{}.{}'.format(name, srv_url)
+            q.put((srv_name, domain, name))
 
-    for x in range(num_threads):
-        worker = Thread(target=check_cloud_worker, args=(q, results, type))
+    for w in range(num_threads):
+        worker = Thread(target=check_cloud_worker, args=(q, results, cloud))
         worker.setDaemon(True)
         worker.start()
 
@@ -144,38 +236,26 @@ def check_cloud(cloud, names, type='default'):
     return results
 
 
-def check_cloud_worker(q, results, type):
+def check_cloud_worker(q, results, cloud):
     while not q.empty():
         work = q.get()
-        srv = work[0]
-        query = work[1]
-        p = work[2]
+        srv_name = work[0]
+        domain = work[1]
+        name = work[2]
 
         if(verbose):
-            print('[d]   checking {}'.format(query))
+            print('[d]   checking {}'.format(domain))
 
-        if not check_dns(query):
-            q.task_done()
-            continue
+        if check_dns(domain):
+            response = check_host(domain)
+            if(response != False or cloud == 'azure'):
+                b = Bucket(name, domain, cloud, srv_name)
+                b.process_status(response)
 
-        response = check_host(query)
-        if(response != False):
-            b = Bucket(query, srv)
-            b.process_status(response)
-            if(b.state == 'OPEN' and type == 'google'):
-                x, b.rights = get_google_rights(p)
-                b.details += x
-        elif(type == 'azure'):
-            b = Bucket(query, srv)
-            b.state = 'DOMAIN'
-        else:
-            q.task_done()
-            continue
+                results.append(b)
+                if not show_open_only or b.state == State.OPEN:
+                    b.echo()
 
-        if(b.state):
-            results.append(b)
-            if not show_open_only or b.state == 'OPEN':
-                b.echo()
         q.task_done()
 
     return True
@@ -183,34 +263,51 @@ def check_cloud_worker(q, results, type):
 
 def show_banner():
     banner = '''\033[0;32m
-           ________                ____  __            __           
+           ________                ____  __            __
           / ____/ /___  __  ______/ / / / /_  ______  / /____  _____
          / /   / / __ \/ / / / __  / /_/ / / / / __ \/ __/ _ \/ ___/
-        / /___/ / /_/ / /_/ / /_/ / __  / /_/ / / / / /_/  __/ /    
+        / /___/ / /_/ / /_/ / /_/ / __  / /_/ / / / / /_/  __/ /
         \____/_/\____/\__,_/\__,_/_/ /_/\__,_/_/ /_/\__/\___/_/
         \n\033[0;0m'''
     print(banner)
 
 
-
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='CloudHunter. Searches for AWS, Azure and Google cloud storage buckets.')
+    parser.add_argument('base_name', metavar='basename', type=str,
+                        nargs='+', help='Company name or any base name.')
+    parser.add_argument('-p', '--permutations-file', metavar='file',
+                        type=str, default='permutations.txt', help='Permutations file.')
+    parser.add_argument('-t', '--threads', metavar='num',
+                        type=int, default=10, help='Threads.')
+    parser.add_argument('-b', '--base-only',  action='store_true',
+                        help='checks only the base name, skips permutations generation.')
+    parser.add_argument('-v', '--verbose',
+                        action='store_true', help='verbose log')
+    parser.add_argument('-o', '--open-only',
+                        action='store_true', help='show only open buckets.')
+    args = parser.parse_args()
     show_banner()
 
-    if(len(sys.argv) < 2):
-        print('Usage: {} company-name\n'.format(sys.argv[0]))
-        exit(1)
+    num_threads = min(300, args.threads)
+    show_open_only = args.open_only
+    verbose = args.verbose
+    results = []
+    base_name = args.base_name[0].strip().lower()
 
-    results = []   
-    base_name = sys.argv[1].strip().lower()
-    permutations = generate_permutations(base_name, 'permutations.txt')
+    if(args.base_only):
+        permutations = [base_name]
+    else:
+        permutations = generate_permutations(base_name, args.permutations_file)
+
     srv_len = len(azureCloud) + len(googleCloud) + len(awsCloud)
-
     print('[>] {} name permutations.'.format(len(permutations)))
     print('[>] {} tries, be patient.\n'.format(len(permutations) * srv_len))
 
     print('\n[+] Check Google Cloud')
     results += check_cloud(googleCloud, permutations, 'google')
- 
+
     print('\n[+] Check Amazon Cloud')
     results += check_cloud(awsCloud, permutations, 'aws')
 
