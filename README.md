@@ -11,15 +11,11 @@ positional arguments:
 
 optional arguments:
   -h, --help            show this help message and exit
-  -p file, --permutations-file file
-                        Permutations file.
-  -t num, --threads num
-                        Threads.
-  -b, --base-only       checks only the base name, skips permutations
-                        generation.
+  -p file, --permutations-file  Permutations file.
+  -t num, --threads 	Threads.
+  -b, --base-only       checks only the base name, skips permutations generation.
   -v, --verbose         verbose log
   -o, --open-only       show only open buckets.
-
 
 ```
 
