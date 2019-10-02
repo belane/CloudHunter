@@ -95,7 +95,7 @@ class Bucket(object):
             self.risk = Risk.MEDIUM
 
         if(len(response.history) != 0 and response.history[0].status_code in [301, 302]):
-            self.details.append('Redirects ' + response.url)
+            self.details.append('Redirect ' + response.url)
 
         self.process_rights()
 
@@ -280,7 +280,7 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--permutations-file', metavar='file',
                         type=str, default='permutations.txt', help='Permutations file.')
     parser.add_argument('-t', '--threads', metavar='num',
-                        type=int, default=10, help='Threads.')
+                        type=int, default=5, help='Threads.')
     parser.add_argument('-b', '--base-only',  action='store_true',
                         help='checks only the base name, skips permutations generation.')
     parser.add_argument('-v', '--verbose',
