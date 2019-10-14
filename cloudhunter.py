@@ -2,20 +2,22 @@
 # -*- coding: utf-8 -*-
 #
 # CloudHunter
-# Version: 0.4
+# Version: 0.4.5
 
 import sys
 import socket
 import requests
 import argparse
 import json
-try:
-    import boto3
-except ImportError:
-    print('Install boto3 for full AWS support.')
 from queue import Queue
 from threading import Thread
 from enum import Enum
+try:
+    import boto3
+    boto_enabled = True
+except ImportError:
+    print('Install boto3 for full AWS support.')
+    boto_enabled = False
 
 
 googleCloud = {
@@ -64,6 +66,7 @@ class Risk(Enum):
 
 
 class Bucket(object):
+
     def __init__(self, name, domain, cloud='Generic', srv_name='Generic'):
         self.name = name
         self.domain = domain
@@ -97,7 +100,7 @@ class Bucket(object):
         if(len(response.history) != 0 and response.history[0].status_code in [301, 302]):
             self.details.append('Redirect ' + response.url)
 
-        self.process_rights()
+        self.get_rights()
 
     def echo(self):
         print('\033[0;{}m{}{:<22}{:<42}\t{:<10}{}\033[0;0m'.format(
@@ -106,9 +109,9 @@ class Bucket(object):
         if verbose and hasattr(self, 'acl'):
             print(json.dumps(self.acl, indent=4))
 
-    def process_rights(self):
+    def get_rights(self):
         if self.state != State.OPEN:
-            return
+            return False
         if self.cloud == 'google':
             self._google_acl()
         elif self.cloud == 'aws':
@@ -117,9 +120,11 @@ class Bucket(object):
             self._azure_acl()
 
     def _azure_acl(self):
-        #azure_api = 'https://{}.blob.core.windows.net/{}?restype=container&comp=acl'.format(self.name,self.name)
-        #remote_acl = requests.get(azure_api)
-        # print(remote_acl)
+        # TODO
+        #azure_api = 'https://{}.blob.core.windows.net/?restype=service&comp=properties'.format(self.name)
+        #headers = {'x-ms-version': '2018-03-28'}
+        #remote_acl = requests.get(azure_api,headers=headers)
+        #print(remote_acl.text)
         pass
 
     def _google_acl(self):
@@ -148,6 +153,8 @@ class Bucket(object):
             self.details.append('{} [{}]'.format(user, symb))
 
     def _aws_acl(self):
+        if not boto_enabled:
+            return False
         try:
             s3 = boto3.client('s3')
             remote_acl = s3.get_bucket_acl(Bucket=self.name)
@@ -184,26 +191,6 @@ class Bucket(object):
             pass
 
 
-def check_dns(hostname):
-    try:
-        ip = socket.gethostbyname(hostname)
-        if ip in ['0.0.0.0', '127.0.0.1']:
-            return False
-        return True
-    except socket.error:
-        return False
-
-
-def check_host(host):
-    try:
-        response = requests.get('http://' + host)
-    except:
-        return False
-    if response.status_code in [404]:
-        return False
-    return response
-
-
 def generate_permutations(base_name, dict_file):
     p = []
     p.append(base_name)
@@ -218,7 +205,27 @@ def generate_permutations(base_name, dict_file):
     return p
 
 
-def check_cloud(cloud_dict, names, cloud='default'):
+def check_dns(hostname):
+    try:
+        ip = socket.gethostbyname(hostname)
+        if ip in ['0.0.0.0', '127.0.0.1']:
+            return False
+        return True
+    except socket.error:
+        return False
+
+
+def check_host(host):
+    try:
+        response = requests.head('http://' + host, allow_redirects=True)
+    except:
+        return False
+    if response.status_code in [404]:
+        return False
+    return response
+
+
+def search_buckets(cloud_dict, names, cloud='default'):
     q = Queue(maxsize=0)
     results = []
 
@@ -228,7 +235,7 @@ def check_cloud(cloud_dict, names, cloud='default'):
             q.put((srv_name, domain, name))
 
     for w in range(num_threads):
-        worker = Thread(target=check_cloud_worker, args=(q, results, cloud))
+        worker = Thread(target=search_buckets_worker, args=(q, results, cloud))
         worker.setDaemon(True)
         worker.start()
 
@@ -236,7 +243,7 @@ def check_cloud(cloud_dict, names, cloud='default'):
     return results
 
 
-def check_cloud_worker(q, results, cloud):
+def search_buckets_worker(q, results, cloud):
     while not q.empty():
         work = q.get()
         srv_name = work[0]
@@ -273,20 +280,13 @@ def show_banner():
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description='CloudHunter. Searches for AWS, Azure and Google cloud storage buckets.')
-    parser.add_argument('base_name', metavar='basename', type=str,
-                        nargs='+', help='Company name or any base name.')
-    parser.add_argument('-p', '--permutations-file', metavar='file',
-                        type=str, default='permutations.txt', help='Permutations file.')
-    parser.add_argument('-t', '--threads', metavar='num',
-                        type=int, default=5, help='Threads.')
-    parser.add_argument('-b', '--base-only',  action='store_true',
-                        help='checks only the base name, skips permutations generation.')
-    parser.add_argument('-v', '--verbose',
-                        action='store_true', help='verbose log')
-    parser.add_argument('-o', '--open-only',
-                        action='store_true', help='show only open buckets.')
+    parser = argparse.ArgumentParser(description='CloudHunter. Searches for AWS, Azure and Google cloud storage buckets.')
+    parser.add_argument('base_name', metavar='basename', type=str, nargs='+', help='Company name or any base name.')
+    parser.add_argument('-p', '--permutations-file', metavar='file', type=str, default='permutations.txt', help='Permutations file.')
+    parser.add_argument('-t', '--threads', metavar='num', type=int, default=7, help='Threads.')
+    parser.add_argument('-b', '--base-only',  action='store_true', help='checks only the base name, skips permutations generation.')
+    parser.add_argument('-v', '--verbose', action='store_true', help='verbose log')
+    parser.add_argument('-o', '--open-only', action='store_true', help='show only open buckets.')
     args = parser.parse_args()
     show_banner()
 
@@ -306,10 +306,10 @@ if __name__ == '__main__':
     print('[>] {} tries, be patient.\n'.format(len(permutations) * srv_len))
 
     print('\n[+] Check Google Cloud')
-    results += check_cloud(googleCloud, permutations, 'google')
+    results += search_buckets(googleCloud, permutations, 'google')
 
     print('\n[+] Check Amazon Cloud')
-    results += check_cloud(awsCloud, permutations, 'aws')
+    results += search_buckets(awsCloud, permutations, 'aws')
 
     print('\n[+] Check Azure Cloud')
-    results += check_cloud(azureCloud, permutations, 'azure')
+    results += search_buckets(azureCloud, permutations, 'azure')
