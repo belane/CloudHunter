@@ -2,16 +2,20 @@
 # -*- coding: utf-8 -*-
 #
 # CloudHunter
-# Version: 0.4.5
+# Version: 0.6.1
 
+import re
 import sys
+import json
 import socket
+import urllib3
 import requests
 import argparse
-import json
+from enum import Enum
 from queue import Queue
 from threading import Thread
-from enum import Enum
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse, urljoin, urlsplit, urldefrag
 try:
     import boto3
     boto_enabled = True
@@ -19,6 +23,9 @@ except ImportError:
     print('Install boto3 for full AWS support.')
     boto_enabled = False
 
+
+HTTP_TIMEOUT = 7
+UserAgent = { 'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/77.0.3865.120 Safari/537.36" }
 
 googleCloud = {
     'Google Storage': 'storage.googleapis.com',
@@ -65,9 +72,151 @@ class Risk(Enum):
     HIGH = 31
 
 
+class Crawl(object):
+
+	HTTP_TIMEOUT = 7
+	UA = { 'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/77.0.3865.120 Safari/537.36" }
+	urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+	known_crawls = []
+
+	def __init__(self, url, deep=0, active_crawl=True):
+		self.url = url
+		self.childs = []
+		self.urls = {}
+		u = urlparse(url)
+		self.scheme = u.scheme
+		self.domain = u.netloc
+		self.base_url = self.get_base_url(url)
+
+		self.crawl(deep, active_crawl)
+
+	def crawl(self, deep=0, active_crawl=False):
+		try:
+			self.known_crawls.append(self.url)
+			r = requests.get(self.url, timeout=self.HTTP_TIMEOUT, verify=False, headers=self.UA)
+		except:
+			return False
+
+		self.urls['js'] = self.extract_javascript(r.text)
+		self.urls['links'] = self.extract_links(r.text)
+		self.urls['styles'] = self.extract_styles(r.text)
+		self.urls['images'] = self.extract_images(r.text)
+		self.urls['forms'] = self.extract_forms(r.text)
+		self.urls['cors'] = self.extract_cors(r.headers)
+
+		if(active_crawl):
+			self.urls['js-pluss'] = self.crawl_raw_urls(self.urls['js'])
+			self.urls['styles-pluss'] = self.crawl_raw_urls(self.urls['styles'])
+			files = [x for x in self.list_urls() if x.endswith('.json') or x.endswith('.xml')]
+			self.urls['files'] = self.crawl_raw_urls(files)
+
+		if(deep > 0):
+			childs = self.filter_scope(list(set(self.urls['links'] + self.urls['forms'])))
+			for child in childs:
+				if child not in self.known_crawls:
+					self.childs.append(Crawl(child, deep=deep - 1, active_crawl=active_crawl))
+
+	def crawl_raw_urls(self, urls):
+		result = []
+		for url in urls:
+			if url in self.known_crawls:
+				continue
+			self.known_crawls.append(url)
+			try:
+				r = requests.get(url, timeout=self.HTTP_TIMEOUT, verify=False, headers=self.UA)
+				result += self.extract_raw_links(r.text)
+			except:
+				pass
+		return result
+
+	def get_base_url(self, url):
+		u = urlparse(url)
+		if(u.path):
+			path = '/'.join(u.path.split('/')[:-1])
+		else:
+			path = u.path
+		return '{}://{}{}'.format(u.scheme, u.netloc, path)
+
+	def list_urls(self, scope=False):
+		result = []
+		for url_list in self.urls.values():
+			for url in url_list:
+				if url.startswith('http'):
+					result.append(url)
+		
+		for child in self.childs:
+			result += child.list_urls(scope)
+
+		if(scope):
+			result = self.filter_scope(result)
+
+		result.sort()
+		return list(set(result))
+
+	def list_out_urls(self):
+		return [x for x in self.list_urls() if self.url not in x]
+
+	def list_dirs(self, scope=False):
+		return list(set([self.get_base_url(x) for x in self.list_urls(scope)]))
+
+	def list_out_dirs(self):
+		return [x for x in self.list_dirs() if self.url not in x]
+
+	def filter_scope(self, values):
+		return [x for x in values if self.domain in x]
+
+	def normalize_url(self, src, base_url=None):
+		url = urlparse(urljoin(self.base_url, src))
+		return '{}://{}{}'.format(url.scheme, url.netloc, url.path)
+
+	def extract_javascript(self, source_code):
+		tree = BeautifulSoup(source_code, 'html.parser')
+		scripts = [self.normalize_url(s.get('src')) for s in tree.find_all('script') if s.get('src')]
+		embedded_scripts = [s.text for s in tree.find_all('script') if not s.get('src')]
+		for src in embedded_scripts:
+			for url in re.findall(r'([\"\'])([\w\d\?\/&=\#\.\!_-]*?\.\w{2,4})(\1)', src):
+				scripts.append(self.normalize_url(url[1]))
+		return list(set(scripts))
+
+	def extract_links(self, source_code):
+		tree = BeautifulSoup(source_code, 'html.parser')
+		hrefs = [self.normalize_url(s.get('href')) for s in tree.find_all('a') if s.get('href')]
+		return list(set(hrefs))
+
+	def extract_images(self, source_code):
+		tree = BeautifulSoup(source_code, 'html.parser')
+		imgs = [self.normalize_url(s.get('src')) for s in tree.find_all('img') if s.get('src')]
+		return list(set(imgs))
+
+	def extract_raw_links(self, source_code):
+		urls = re.findall('http[s]?://(?:[a-zA-Z]|[0-9]|[/?=\-_@.&+]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', source_code)
+		return list(set(urls))
+
+	def extract_styles(self, source_code):
+		tree = BeautifulSoup(source_code, 'html.parser')
+		hrefs = [self.normalize_url(s.get('href')) for s in tree.find_all('link') if s.get('href')]
+		embedded_styles = [s.text for s in tree.find_all('link') if not s.get('href')]
+		for src in embedded_styles:
+			for url in re.findall(r'([\"\'])([\w\d\?\/&=\#\.\!_-]*?\.\w{2,4})(\1)', src):
+				hrefs.append(self.normalize_url(url[1]))
+		return list(set(hrefs))
+
+	def extract_forms(self, source_code):
+		tree = BeautifulSoup(source_code, 'html.parser')
+		hrefs = [self.normalize_url(s.get('action')) for s in tree.find_all('form') if s.get('action')]
+		return list(set(hrefs))
+
+	def extract_cors(self, headers):
+		cors = []
+		if hasattr(headers, 'Access-Control-Allow-Origin'):
+			cors = headers['Access-Control-Allow-Origin'].split(',')
+			if '*' in cors: return []
+		return cors
+
+
 class Bucket(object):
 
-    def __init__(self, name, domain, cloud='Generic', srv_name='Generic'):
+    def __init__(self, name, domain, cloud='generic', srv_name='Generic'):
         self.name = name
         self.domain = domain
         self.cloud = cloud
@@ -130,7 +279,7 @@ class Bucket(object):
     def _google_acl(self):
         google_api = 'https://www.googleapis.com/storage/v1/b/{}/iam/testPermissions?permissions=storage.buckets.delete&permissions=storage.buckets.get&permissions=storage.buckets.getIamPolicy&permissions=storage.buckets.setIamPolicy&permissions=storage.buckets.update&permissions=storage.objects.create&permissions=storage.objects.delete&permissions=storage.objects.get&permissions=storage.objects.list&permissions=storage.objects.update'.format(
             self.name)
-        remote_acl = requests.get(google_api).json()
+        remote_acl = requests.get(google_api, timeout=HTTP_TIMEOUT, verify=False, headers=UserAgent).json()
 
         if remote_acl.get('permissions'):
             self.acl = remote_acl['permissions']
@@ -225,7 +374,7 @@ def check_host(host):
     return response
 
 
-def search_buckets(cloud_dict, names, cloud='default'):
+def search_buckets(cloud_dict, names, cloud='generic'):
     q = Queue(maxsize=0)
     results = []
 
@@ -267,6 +416,57 @@ def search_buckets_worker(q, results, cloud):
 
     return True
 
+def what_cloud(urls):
+    q = Queue(maxsize=0)
+    results = []
+
+    for url in urls:
+        q.put((url))
+
+    for w in range(num_threads):
+        worker = Thread(target=what_cloud_worker, args=(q, results))
+        worker.setDaemon(True)
+        worker.start()
+
+    q.join()
+    return results
+
+
+def what_cloud_worker(q, results):
+    while not q.empty():
+        url = q.get()
+
+        if(verbose):
+            print('[d]   checking {}'.format(url))
+
+        try:
+            response = requests.head(url, allow_redirects=True, timeout=HTTP_TIMEOUT, verify=False, headers=UserAgent)
+        except:
+            q.task_done()
+            continue
+        #if response.status_code in [404]:
+        #    q.task_done()
+        #    continue
+
+        if any(x in response.headers.keys() for x in ['x-amz-request-id', 'x-amz-id-2']):
+            cloud = 'aws'
+        elif any(x in response.headers.keys() for x in ['X-GUploader-UploadID', 'x-goog-metageneration', 'X-Cloud-Trace-Context']):
+            cloud = 'google'
+        elif any(x in response.headers.keys() for x in ['x-ms-request-id']):
+            cloud = 'azure'
+        else:
+            q.task_done()
+            continue
+
+        b = Bucket(cloud, url, cloud, '{} Cloud'.format(cloud.capitalize()))
+        b.process_status(response)
+
+        results.append(b)
+        if not show_open_only or b.state == State.OPEN:
+            b.echo()
+
+        q.task_done()
+
 
 def show_banner():
     banner = '''\033[0;32m
@@ -281,12 +481,14 @@ def show_banner():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='CloudHunter. Searches for AWS, Azure and Google cloud storage buckets.')
-    parser.add_argument('base_name', metavar='basename', type=str, nargs='+', help='Company name or any base name.')
+    parser.add_argument('input', metavar='input', type=str, nargs='+', help='Company name, url or any base name.')
     parser.add_argument('-p', '--permutations-file', metavar='file', type=str, default='permutations.txt', help='Permutations file.')
     parser.add_argument('-t', '--threads', metavar='num', type=int, default=7, help='Threads.')
-    parser.add_argument('-b', '--base-only',  action='store_true', help='checks only the base name, skips permutations generation.')
-    parser.add_argument('-v', '--verbose', action='store_true', help='verbose log')
-    parser.add_argument('-o', '--open-only', action='store_true', help='show only open buckets.')
+    parser.add_argument('-c', '--crawl-deep', metavar='num', type=int, default=0, help='How many pages to crawl after the first.')
+    parser.add_argument('-b', '--base-only',  action='store_true', help='Checks only the base name, skips permutations generation.')
+    parser.add_argument('-d', '--disable-bruteforce',  action='store_true', help='Disable discovery by brute force.')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose log')
+    parser.add_argument('-o', '--open-only', action='store_true', help='Show only open buckets.')
     args = parser.parse_args()
     show_banner()
 
@@ -294,7 +496,25 @@ if __name__ == '__main__':
     show_open_only = args.open_only
     verbose = args.verbose
     results = []
-    base_name = args.base_name[0].strip().lower()
+
+    if args.input[0].startswith('http'):
+        url = args.input[0].strip().lower()
+        base_name = urlparse(url).netloc.split('.')[-2] # TODO ccTLD
+
+        print('[>] Crawling {} ...'.format(url))
+        urls = [url]
+        c = Crawl(url, args.crawl_deep)
+        urls += c.list_out_dirs()
+
+        print('[>] {} possible endpoints found'.format(len(urls)))
+        results += what_cloud(urls)
+        print('\n')
+
+    else:
+        base_name = args.input[0].strip().lower()
+
+    if(args.disable_bruteforce):
+        exit(0)
 
     if(args.base_only):
         permutations = [base_name]

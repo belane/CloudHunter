@@ -3,25 +3,28 @@ Looks for AWS, Azure and Google cloud storage buckets and lists permissions for 
 
 ## Usage
 ```
-usage: cloudhunter.py [-h] [-p file] [-t num] [-b] [-v] [-o] basename
+usage: cloudhunter.py [-h] [-p file] [-t num] [-c num] [-b] [-d] [-v] [-o] input
 
 
 positional arguments:
-  basename              Company name or any base name.
+  input                          Company name, url or any base name.
 
 optional arguments:
-  -h, --help            show this help message and exit
-  -p file, --permutations-file  Permutations file.
-  -t num, --threads 	Threads.
-  -b, --base-only       checks only the base name, skips permutations generation.
-  -v, --verbose         verbose log
-  -o, --open-only       show only open buckets.
+  -h, --help                     show this help message and exit
+  -p file, --permutations-file   Permutations file.
+  -t num, --threads num          Threads.
+  -c num, --crawl-deep num       How many pages to crawl after the first.
+  -b, --base-only                Checks only the base name, skips permutations generation.
+  -d, --disable-bruteforce       Disable discovery by brute force.
+  -v, --verbose                  Verbose log
+  -o, --open-only                Show only open buckets.
+
 
 ```
 
 ## Output
 ```
- python3 cloudhunter.py -t 10 example
+ python3 cloudhunter.py -t 10 http://example.com
 
            ________                ____  __            __
           / ____/ /___  __  ______/ / / / /_  ______  / /____  _____
@@ -30,9 +33,14 @@ optional arguments:
         \____/_/\____/\__,_/\__,_/_/ /_/\__,_/_/ /_/\__/\___/_/
 
 
+[>] Crawling http://example.com ...
+[>] 61 possible endpoints found
+    Azure Cloud           https://dmpcdn.files-example/cdn              PRIVATE
+    Google Cloud          http://demo-site.org                          OPEN      Redirect https://demo-site.org/
+    Google Cloud          https://other.net                             OPEN      
+
 [>] 1591 name permutations.
 [>] 33411 tries, be patient.
-
 
 [+] Check Google Cloud
     Google Storage        example.storage.googleapis.com                 PRIVATE
@@ -70,3 +78,11 @@ optional arguments:
     SharePoint            example.sharepoint.com                         PRIVATE   Redirect https://example.sharepoint.com/
 	...
 ```
+
+
+## Thanks
+
+- [@brianwarehime](https://github.com/brianwarehime) ([inSp3ctor](https://github.com/brianwarehime/inSp3ctor))
+- [@SpenGietz](https://github.com/SpenGietz) ([GCPBucketBrute](https://github.com/RhinoSecurityLabs/GCPBucketBrute))
+- [@kfosaaen](https://github.com/kfosaaen) ([MicroBurst](https://github.com/NetSPI/MicroBurst))
+- [@PatrikHudak](https://github.com/PatrikHudak) ([second-order](https://gist.github.com/PatrikHudak/2006c50a694cc76ead705c91805df78b))
