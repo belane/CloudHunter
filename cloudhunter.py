@@ -18,9 +18,13 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin, urlsplit, urldefrag
 try:
     import boto3
-    boto_enabled = True
+    if 'default' in boto3.Session().available_profiles:
+        boto_enabled = True
+    else:
+        print('\033[0;31m\n[!] Set up AWS credentials for full access rights listing.\033[0;0m')
+        boto_enabled = False
 except ImportError:
-    print('Install boto3 for full AWS support.')
+    print('\033[0;31m\n[!] Install boto3 for full AWS support.\033[0;0m')
     boto_enabled = False
 
 
