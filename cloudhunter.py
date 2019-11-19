@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 # CloudHunter
-# Version: 0.6.1
+# Version: 0.6.7
 
 import re
 import sys
@@ -11,6 +11,7 @@ import socket
 import urllib3
 import requests
 import argparse
+import tldextract
 from enum import Enum
 from queue import Queue
 from threading import Thread
@@ -76,148 +77,6 @@ class Risk(Enum):
     HIGH = 31
 
 
-class Crawl(object):
-
-	HTTP_TIMEOUT = 7
-	UA = { 'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/77.0.3865.120 Safari/537.36" }
-	urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-	known_crawls = []
-
-	def __init__(self, url, deep=0, active_crawl=True):
-		self.url = url
-		self.childs = []
-		self.urls = {}
-		u = urlparse(url)
-		self.scheme = u.scheme
-		self.domain = u.netloc
-		self.base_url = self.get_base_url(url)
-
-		self.crawl(deep, active_crawl)
-
-	def crawl(self, deep=0, active_crawl=False):
-		try:
-			self.known_crawls.append(self.url)
-			r = requests.get(self.url, timeout=self.HTTP_TIMEOUT, verify=False, headers=self.UA)
-		except:
-			return False
-
-		self.urls['js'] = self.extract_javascript(r.text)
-		self.urls['links'] = self.extract_links(r.text)
-		self.urls['styles'] = self.extract_styles(r.text)
-		self.urls['images'] = self.extract_images(r.text)
-		self.urls['forms'] = self.extract_forms(r.text)
-		self.urls['cors'] = self.extract_cors(r.headers)
-
-		if(active_crawl):
-			self.urls['js-pluss'] = self.crawl_raw_urls(self.urls['js'])
-			self.urls['styles-pluss'] = self.crawl_raw_urls(self.urls['styles'])
-			files = [x for x in self.list_urls() if x.endswith('.json') or x.endswith('.xml')]
-			self.urls['files'] = self.crawl_raw_urls(files)
-
-		if(deep > 0):
-			childs = self.filter_scope(list(set(self.urls['links'] + self.urls['forms'])))
-			for child in childs:
-				if child not in self.known_crawls:
-					self.childs.append(Crawl(child, deep=deep - 1, active_crawl=active_crawl))
-
-	def crawl_raw_urls(self, urls):
-		result = []
-		for url in urls:
-			if url in self.known_crawls:
-				continue
-			self.known_crawls.append(url)
-			try:
-				r = requests.get(url, timeout=self.HTTP_TIMEOUT, verify=False, headers=self.UA)
-				result += self.extract_raw_links(r.text)
-			except:
-				pass
-		return result
-
-	def get_base_url(self, url):
-		u = urlparse(url)
-		if(u.path):
-			path = '/'.join(u.path.split('/')[:-1])
-		else:
-			path = u.path
-		return '{}://{}{}'.format(u.scheme, u.netloc, path)
-
-	def list_urls(self, scope=False):
-		result = []
-		for url_list in self.urls.values():
-			for url in url_list:
-				if url.startswith('http'):
-					result.append(url)
-		
-		for child in self.childs:
-			result += child.list_urls(scope)
-
-		if(scope):
-			result = self.filter_scope(result)
-
-		result.sort()
-		return list(set(result))
-
-	def list_out_urls(self):
-		return [x for x in self.list_urls() if self.url not in x]
-
-	def list_dirs(self, scope=False):
-		return list(set([self.get_base_url(x) for x in self.list_urls(scope)]))
-
-	def list_out_dirs(self):
-		return [x for x in self.list_dirs() if self.url not in x]
-
-	def filter_scope(self, values):
-		return [x for x in values if self.domain in x]
-
-	def normalize_url(self, src, base_url=None):
-		url = urlparse(urljoin(self.base_url, src))
-		return '{}://{}{}'.format(url.scheme, url.netloc, url.path)
-
-	def extract_javascript(self, source_code):
-		tree = BeautifulSoup(source_code, 'html.parser')
-		scripts = [self.normalize_url(s.get('src')) for s in tree.find_all('script') if s.get('src')]
-		embedded_scripts = [s.text for s in tree.find_all('script') if not s.get('src')]
-		for src in embedded_scripts:
-			for url in re.findall(r'([\"\'])([\w\d\?\/&=\#\.\!_-]*?\.\w{2,4})(\1)', src):
-				scripts.append(self.normalize_url(url[1]))
-		return list(set(scripts))
-
-	def extract_links(self, source_code):
-		tree = BeautifulSoup(source_code, 'html.parser')
-		hrefs = [self.normalize_url(s.get('href')) for s in tree.find_all('a') if s.get('href')]
-		return list(set(hrefs))
-
-	def extract_images(self, source_code):
-		tree = BeautifulSoup(source_code, 'html.parser')
-		imgs = [self.normalize_url(s.get('src')) for s in tree.find_all('img') if s.get('src')]
-		return list(set(imgs))
-
-	def extract_raw_links(self, source_code):
-		urls = re.findall('http[s]?://(?:[a-zA-Z]|[0-9]|[/?=\-_@.&+]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', source_code)
-		return list(set(urls))
-
-	def extract_styles(self, source_code):
-		tree = BeautifulSoup(source_code, 'html.parser')
-		hrefs = [self.normalize_url(s.get('href')) for s in tree.find_all('link') if s.get('href')]
-		embedded_styles = [s.text for s in tree.find_all('link') if not s.get('href')]
-		for src in embedded_styles:
-			for url in re.findall(r'([\"\'])([\w\d\?\/&=\#\.\!_-]*?\.\w{2,4})(\1)', src):
-				hrefs.append(self.normalize_url(url[1]))
-		return list(set(hrefs))
-
-	def extract_forms(self, source_code):
-		tree = BeautifulSoup(source_code, 'html.parser')
-		hrefs = [self.normalize_url(s.get('action')) for s in tree.find_all('form') if s.get('action')]
-		return list(set(hrefs))
-
-	def extract_cors(self, headers):
-		cors = []
-		if hasattr(headers, 'Access-Control-Allow-Origin'):
-			cors = headers['Access-Control-Allow-Origin'].split(',')
-			if '*' in cors: return []
-		return cors
-
-
 class Bucket(object):
 
     def __init__(self, name, domain, cloud='generic', srv_name='Generic'):
@@ -233,9 +92,16 @@ class Bucket(object):
         if(response == False):
             self.state = State.DOMAIN
             return
-        elif response.status_code == 200:
+
+        if self.name == base_name:
+            self.risk = Risk.MEDIUM
+
+        if response.status_code == 200:
             self.state = State.OPEN
             self.risk = Risk.MEDIUM
+            if 'application/xml' in response.headers['Content-Type']:
+                self.risk = Risk.HIGH
+                self.details.append('LIST')
         elif response.status_code in [400, 401, 403]:
             self.state = State.PRIVATE
         elif response.status_code in [500, 502, 503]:
@@ -246,9 +112,6 @@ class Bucket(object):
             self.state = State.UNKNOWN
             self.risk = Risk.MEDIUM
             self.details.append('Response: {}'.format(response.status_code))
-
-        if self.name == base_name:
-            self.risk = Risk.MEDIUM
 
         if(len(response.history) != 0 and response.history[0].status_code in [301, 302]):
             self.details.append('Redirect ' + response.url)
@@ -273,11 +136,39 @@ class Bucket(object):
             self._azure_acl()
 
     def _azure_acl(self):
-        # TODO
-        #azure_api = 'https://{}.blob.core.windows.net/?restype=service&comp=properties'.format(self.name)
-        #headers = {'x-ms-version': '2018-03-28'}
-        #remote_acl = requests.get(azure_api,headers=headers)
-        #print(remote_acl.text)
+        # TODO Test
+        '''
+        from azure.storage.blob import BlobServiceClient, ContainerClient
+        
+        account = self.name
+
+        try:
+            #service = BlobServiceClient(account_url='https://{}.blob.core.windows.net'.format(account), credential='') # null session
+            service = BlobServiceClient(account_url='https://{}.blob.core.windows.net'.format(account)) # Anonymous
+            containers = list(service.list_containers())
+        except:
+            containers = []
+
+        if(containers):
+            self.risk = Risk.HIGH
+            self.details.append('Found containers: {}'.format(','.join([c.name for c in containers])))
+
+        if self.domain.startswith('http'):
+            u = urlparse(self.domain)
+            srv = u.path.split('/')[1:2]
+            blob = srv if srv else account
+
+            try:
+                #container = ContainerClient.from_connection_string(conn_str='DefaultEndpointsProtocol=https;AccountName={};AccountKey=;EndpointSuffix=core.windows.net'.format(account), container_name=blob)
+                container = ContainerClient.from_container_url('https://{}.blob.core.windows.net/{}'.format(account, blob)) # Anonymous
+                blobs = list(container.list_blobs())
+            except:
+                blobs = []
+
+            if(blobs):
+                self.risk = Risk.HIGH
+                self.details.append('LIST')
+        '''
         pass
 
     def _google_acl(self):
@@ -344,9 +235,162 @@ class Bucket(object):
             pass
 
 
+class HiddenGems(object):
+
+	HTTP_TIMEOUT = 5
+	UA = { 'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/77.0.3865.120 Safari/537.36" }
+	urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+	known_urls = []
+
+	def __init__(self, url, deep=0, active_crawl=True):
+		self.url = url
+		self.childs = []
+		self.urls = {}
+		u = urlparse(url)
+		self.scheme = u.scheme
+		self.domain = u.netloc
+		self.base_url = self.get_base_url(url)
+
+		self.crawl(deep, active_crawl)
+
+	def crawl(self, deep=0, active_crawl=False):
+		try:
+			self.known_urls.append(self.url)
+			r = requests.get(self.url, timeout=self.HTTP_TIMEOUT, verify=False, headers=self.UA)
+			if 'text/html' not in r.headers['Content-Type']: return False
+		except:
+			return False
+
+		self.urls['js'] = self.extract_javascript(r.text)
+		self.urls['links'] = self.extract_links(r.text)
+		self.urls['styles'] = self.extract_styles(r.text)
+		self.urls['images'] = self.extract_images(r.text)
+		self.urls['forms'] = self.extract_forms(r.text)
+		self.urls['cors'] = self.extract_cors(r.headers)
+
+		if(active_crawl):
+			self.urls['js-pluss'] = self.crawl_raw_urls(self.urls['js'])
+			self.urls['styles-pluss'] = self.crawl_raw_urls(self.urls['styles'])
+			files = [x for x in self.list_urls() if x.endswith('.json') or x.endswith('.xml')]
+			self.urls['files'] = self.crawl_raw_urls(files)
+
+		if(deep > 0):
+			childs = self.filter_scope(list(set(self.urls['links'] + self.urls['forms'])))
+			childs = [x for x in childs if self.normalize_url(x)[-3::].lower() not in ['pdf','zip','jpg','png','avi','mp3','mp4','.gz','tar','rar','.7z']]
+			for child in childs:
+				if child not in self.known_urls:
+					self.childs.append(HiddenGems(child, deep=deep - 1, active_crawl=active_crawl))
+
+	def crawl_raw_urls(self, urls):
+		result = []
+		for url in urls:
+			if url in self.known_urls:
+				continue
+			self.known_urls.append(url)
+			try:
+				r = requests.get(url, timeout=self.HTTP_TIMEOUT, verify=False, headers=self.UA)
+				result += self.extract_raw_links(r.text)
+			except:
+				pass
+		return result
+
+	def get_base_url(self, url):
+		u = urlparse(url)
+		if(u.path):
+			path = '/'.join(u.path.split('/')[:-1])
+		else:
+			path = u.path
+		return '{}://{}{}'.format(u.scheme, u.netloc, path)
+
+	def filter_scope(self, values):
+		return [x for x in values if self.domain == urlparse(x).netloc]
+
+	def normalize_url(self, src, full_query=False, base_url=None):
+		if not base_url:
+			base_url = self.base_url
+		url = urlparse(urljoin(base_url, src))
+		if full_query and url.query:
+			query = '?' + url.query
+		else:
+			query = ''
+		return '{}://{}{}{}'.format(url.scheme, url.netloc, url.path, query)
+
+	def list_urls(self, scope=False, full_query=False):
+		result = []
+		for url_list in self.urls.values():
+			for url in url_list:
+				if url.startswith('http'):
+					result.append(url)
+		
+		for child in self.childs:
+			result += child.list_urls(scope)
+
+		if(scope):
+			result = self.filter_scope(result)
+
+		result = [self.normalize_url(x, full_query) for x in result]
+		result.sort()
+		return list(set(result))
+
+	def list_out_urls(self, full_query=False):
+		return [x for x in self.list_urls(scope=False, full_query=full_query) if self.domain != urlparse(x).netloc]
+
+	def list_dirs(self, scope=False):
+		return list(set([self.get_base_url(x) for x in self.list_urls(scope)]))
+
+	def list_out_dirs(self):
+		return list(set([self.get_base_url(x) for x in self.list_out_urls()]))
+
+	def list_domains(self):
+		return list(set([urlparse(x).netloc for x in self.list_urls()]))
+
+	def extract_javascript(self, source_code):
+		tree = BeautifulSoup(source_code, 'html.parser')
+		scripts = [self.normalize_url(s.get('src')) for s in tree.find_all('script') if s.get('src')]
+		embedded_scripts = [s.text for s in tree.find_all('script') if not s.get('src')]
+		for src in embedded_scripts:
+			for url in re.findall(r'([\"\'])([\w\d\?\/&=\#\.\!_-]*?\.\w{2,4})(\1)', src):
+				scripts.append(self.normalize_url(url[1]))
+		return list(set(scripts))
+
+	def extract_links(self, source_code):
+		tree = BeautifulSoup(source_code, 'html.parser')
+		hrefs = [self.normalize_url(s.get('href'), True) for s in tree.find_all('a') if s.get('href')]
+		return list(set(hrefs))
+
+	def extract_images(self, source_code):
+		tree = BeautifulSoup(source_code, 'html.parser')
+		imgs = [self.normalize_url(s.get('src')) for s in tree.find_all('img') if s.get('src')]
+		return list(set(imgs))
+
+	def extract_raw_links(self, source_code):
+		urls = re.findall('http[s]?://(?:[a-zA-Z]|[0-9]|[/?=\-_@.&+]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', source_code)
+		return list(set(urls))
+
+	def extract_styles(self, source_code):
+		tree = BeautifulSoup(source_code, 'html.parser')
+		hrefs = [self.normalize_url(s.get('href')) for s in tree.find_all('link') if s.get('href')]
+		embedded_styles = [s.text for s in tree.find_all('link') if not s.get('href')]
+		for src in embedded_styles:
+			for url in re.findall(r'([\"\'])([\w\d\?\/&=\#\.\!_-]*?\.\w{2,4})(\1)', src):
+				hrefs.append(self.normalize_url(url[1]))
+		return list(set(hrefs))
+
+	def extract_forms(self, source_code):
+		tree = BeautifulSoup(source_code, 'html.parser')
+		hrefs = [self.normalize_url(s.get('action'), True) for s in tree.find_all('form') if s.get('action')]
+		return list(set(hrefs))
+
+	def extract_cors(self, headers):
+		cors = []
+		if hasattr(headers, 'Access-Control-Allow-Origin'):
+			cors = headers['Access-Control-Allow-Origin'].split(',')
+			if '*' in cors: return []
+		return cors
+
+
 def generate_permutations(base_name, dict_file):
-    p = []
-    p.append(base_name)
+    p = [base_name]
     rules = ['{}-{}', '{}.{}', '{}{}']
 
     with open(dict_file, 'r') as f:
@@ -361,9 +405,7 @@ def generate_permutations(base_name, dict_file):
 def check_dns(hostname):
     try:
         ip = socket.gethostbyname(hostname)
-        if ip in ['0.0.0.0', '127.0.0.1']:
-            return False
-        return True
+        return False if ip in ['0.0.0.0', '127.0.0.1'] else True
     except socket.error:
         return False
 
@@ -420,6 +462,7 @@ def search_buckets_worker(q, results, cloud):
 
     return True
 
+
 def what_cloud(urls):
     q = Queue(maxsize=0)
     results = []
@@ -455,6 +498,9 @@ def what_cloud_worker(q, results):
         if any(x in response.headers.keys() for x in ['x-amz-request-id', 'x-amz-id-2']):
             cloud = 'aws'
         elif any(x in response.headers.keys() for x in ['X-GUploader-UploadID', 'x-goog-metageneration', 'X-Cloud-Trace-Context']):
+            if urlparse(url).netloc.endswith('.google.com'):
+                q.task_done()
+                continue
             cloud = 'google'
         elif any(x in response.headers.keys() for x in ['x-ms-request-id']):
             cloud = 'azure'
@@ -462,7 +508,22 @@ def what_cloud_worker(q, results):
             q.task_done()
             continue
 
-        b = Bucket(cloud, url, cloud, '{} Cloud'.format(cloud.capitalize()))
+        srv_name = '{} Cloud'.format(cloud.capitalize())
+        domain_name = tldextract.extract(url).domain
+        u = urlparse(url)
+        domain = u.netloc
+        srv = u.path.split('/')[1:2]
+
+        if len(domain.split('.')) > 3:
+            name = domain.split('.')[0]
+        elif not srv:
+            name = domain_name
+        elif domain_name in ['amazonaws','amazon','google','googleapis','appspot','azure','azureedge','windows']:
+            name = srv
+        else:
+            name = domain_name
+
+        b = Bucket(name, url, cloud, srv_name)
         b.process_status(response)
 
         results.append(b)
@@ -488,7 +549,7 @@ if __name__ == '__main__':
     parser.add_argument('input', metavar='input', type=str, nargs='+', help='Company name, url or any base name.')
     parser.add_argument('-p', '--permutations-file', metavar='file', type=str, default='permutations.txt', help='Permutations file.')
     parser.add_argument('-t', '--threads', metavar='num', type=int, default=7, help='Threads.')
-    parser.add_argument('-c', '--crawl-deep', metavar='num', type=int, default=0, help='How many pages to crawl after the first.')
+    parser.add_argument('-c', '--crawl-deep', metavar='num', type=int, default=1, help='How many pages to crawl after the first.')
     parser.add_argument('-b', '--base-only',  action='store_true', help='Checks only the base name, skips permutations generation.')
     parser.add_argument('-d', '--disable-bruteforce',  action='store_true', help='Disable discovery by brute force.')
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose log')
@@ -503,16 +564,15 @@ if __name__ == '__main__':
 
     if args.input[0].startswith('http'):
         url = args.input[0].strip().lower()
-        base_name = urlparse(url).netloc.split('.')[-2] # TODO ccTLD
+        base_name = tldextract.extract(url).domain
 
         print('[>] Crawling {} ...'.format(url))
         urls = [url]
-        c = Crawl(url, args.crawl_deep)
+        c = HiddenGems(url, args.crawl_deep)
         urls += c.list_out_dirs()
 
         print('[>] {} possible endpoints found'.format(len(urls)))
         results += what_cloud(urls)
-        print('\n')
 
     else:
         base_name = args.input[0].strip().lower()
@@ -526,7 +586,7 @@ if __name__ == '__main__':
         permutations = generate_permutations(base_name, args.permutations_file)
 
     srv_len = len(azureCloud) + len(googleCloud) + len(awsCloud)
-    print('[>] {} name permutations.'.format(len(permutations)))
+    print('[>] Bruteforce {} name permutations.'.format(len(permutations)))
     print('[>] {} tries, be patient.\n'.format(len(permutations) * srv_len))
 
     print('\n[+] Check Google Cloud')
@@ -537,3 +597,5 @@ if __name__ == '__main__':
 
     print('\n[+] Check Azure Cloud')
     results += search_buckets(azureCloud, permutations, 'azure')
+
+    # TODO save results to a json report
