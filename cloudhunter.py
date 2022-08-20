@@ -227,6 +227,7 @@ class HiddenGems(object):
 
 	HTTP_TIMEOUT = 5
 	UA = { 'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/77.0.3865.120 Safari/537.36" }
+	skip_extensions = ['exe','bin','pdf','zip','jpg','png','svg','avi','mp3','mp4','gz','tar','rar','7z','ttf','otf','woff','woff2']
 	urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 	known_urls = []
 
@@ -264,7 +265,7 @@ class HiddenGems(object):
 
 		if(deep > 0):
 			childs = self.filter_scope(list(set(self.urls['links'] + self.urls['forms'])))
-			childs = [x for x in childs if self.normalize_url(x)[-3::].lower() not in ['pdf','zip','jpg','png','avi','mp3','mp4','.gz','tar','rar','.7z']]
+			childs = [x for x in childs if self.url_extension(x) not in self.skip_extensions]
 			for child in childs:
 				if child not in self.known_urls:
 					self.childs.append(HiddenGems(child, deep=deep - 1, active_crawl=active_crawl))
@@ -275,6 +276,8 @@ class HiddenGems(object):
 			if url in self.known_urls:
 				continue
 			self.known_urls.append(url)
+			if self.url_extension(url) in self.skip_extensions:
+				continue
 			try:
 				r = requests.get(url, timeout=self.HTTP_TIMEOUT, verify=False, headers=self.UA)
 				result += self.extract_raw_links(r.text)
@@ -302,6 +305,13 @@ class HiddenGems(object):
 		else:
 			query = ''
 		return '{}://{}{}{}'.format(url.scheme, url.netloc, url.path, query)
+
+	def url_extension(self, url):
+		file = self.normalize_url(url).split('/')[-1]
+		parts = file.split('.')
+		if len(parts) == 1:
+			return None
+		return parts[-1].lower()
 
 	def list_urls(self, scope=False, full_query=False):
 		result = []
