@@ -12,22 +12,12 @@ import urllib3
 import requests
 import argparse
 import tldextract
+import xmltodict
 from enum import Enum
 from queue import Queue
 from threading import Thread
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin, urlsplit, urldefrag
-try:
-    import boto3
-    if 'default' in boto3.Session().available_profiles:
-        boto_enabled = True
-    else:
-        print('\033[0;31m\n[!] Set up AWS credentials for full access rights listing.\033[0;0m')
-        boto_enabled = False
-except ImportError:
-    print('\033[0;31m\n[!] Install boto3 for full AWS support.\033[0;0m')
-    boto_enabled = False
-
 
 HTTP_TIMEOUT = 7
 UserAgent = { 'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/77.0.3865.120 Safari/537.36" }
@@ -197,19 +187,20 @@ class Bucket(object):
             self.details.append('{} [{}]'.format(user, symb))
 
     def _aws_acl(self):
-        if not boto_enabled:
-            return False
-        try:
-            s3 = boto3.client('s3')
-            remote_acl = s3.get_bucket_acl(Bucket=self.name)
-            if 'Grants' in remote_acl:
-                self.acl = remote_acl['Grants']
+        aws_api = f"https://{self.name}.s3.amazonaws.com/?acl"
+        remote_acl = requests.get(aws_api).text
+        acl_dict = xmltodict.parse(remote_acl)
+        if 'AccessControlPolicy' in acl_dict:
+            acl_dict = acl_dict['AccessControlPolicy']['AccessControlList']
+
+            if 'Grant' in acl_dict:
+                self.acl = acl_dict['Grant']
                 rights = {}
 
                 for right in self.acl:
-                    if right['Grantee']['Type'] == 'CanonicalUser' and 'DisplayName' in right['Grantee']:
+                    if right['Grantee']['@xsi:type'] == 'CanonicalUser' and 'DisplayName' in right['Grantee']:
                         user = right['Grantee']['DisplayName']
-                    elif right['Grantee']['Type'] == 'Group':
+                    elif right['Grantee']['@xsi:type'] == 'Group':
                         user = right['Grantee']['URI'].split('/')[-1]
                     else:
                         user = right['Grantee']['ID'][:8]
@@ -230,9 +221,6 @@ class Bucket(object):
 
                 for user, symb in rights.items():
                     self.details.append('{} [{}]'.format(user, symb))
-
-        except:
-            pass
 
 
 class HiddenGems(object):
