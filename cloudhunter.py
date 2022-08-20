@@ -479,18 +479,18 @@ def what_cloud_worker(q, results):
         except:
             q.task_done()
             continue
-        #if response.status_code in [404]:
-        #    q.task_done()
-        #    continue
 
-        if any(x in response.headers.keys() for x in ['x-amz-request-id', 'x-amz-id-2']):
+        fqdn = tldextract.extract(url).fqdn
+        headers = response.headers.keys()
+
+        if any(h in headers for h in ['x-amz-request-id', 'x-amz-id-2']) or any(n in fqdn for n in awsCloud.values()):
             cloud = 'aws'
-        elif any(x in response.headers.keys() for x in ['X-GUploader-UploadID', 'x-goog-metageneration', 'X-Cloud-Trace-Context']):
+        elif any(h in headers for h in ['X-GUploader-UploadID', 'x-goog-metageneration', 'X-Cloud-Trace-Context']) or any(n in fqdn for n in googleCloud.values()):
             if urlparse(url).netloc.endswith('.google.com'):
                 q.task_done()
                 continue
             cloud = 'google'
-        elif any(x in response.headers.keys() for x in ['x-ms-request-id']):
+        elif any(h in headers for h in ['x-ms-request-id']) or any(n in fqdn for n in azureCloud.values()):
             cloud = 'azure'
         else:
             q.task_done()
