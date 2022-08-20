@@ -2,10 +2,9 @@
 # -*- coding: utf-8 -*-
 #
 # CloudHunter
-# Version: 0.6.7
+# Version: 0.6.8
 
 import re
-import sys
 import json
 import socket
 import urllib3
@@ -17,7 +16,7 @@ from enum import Enum
 from queue import Queue
 from threading import Thread
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse, urljoin, urlsplit, urldefrag
+from urllib.parse import urlparse, urljoin
 
 HTTP_TIMEOUT = 7
 UserAgent = { 'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/77.0.3865.120 Safari/537.36" }
@@ -537,7 +536,7 @@ def show_banner():
           / ____/ /___  __  ______/ / / / /_  ______  / /____  _____
          / /   / / __ \/ / / / __  / /_/ / / / / __ \/ __/ _ \/ ___/
         / /___/ / /_/ / /_/ / /_/ / __  / /_/ / / / / /_/  __/ /
-        \____/_/\____/\__,_/\__,_/_/ /_/\__,_/_/ /_/\__/\___/_/
+        \____/_/\____/\__,_/\__,_/_/ /_/\__,_/_/ /_/\__/\___/_/  v0.6.8
         \n\033[0;0m'''
     print(banner)
 
