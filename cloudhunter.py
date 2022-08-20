@@ -400,7 +400,7 @@ def check_dns(hostname):
 
 def check_host(host):
     try:
-        response = requests.head('http://' + host, allow_redirects=True)
+        response = requests.head('http://' + host, allow_redirects=True, timeout=HTTP_TIMEOUT, verify=False, headers=UserAgent)
     except:
         return False
     if response.status_code in [404]:
