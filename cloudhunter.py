@@ -2,23 +2,24 @@
 # -*- coding: utf-8 -*-
 #
 # CloudHunter
-# Version: 0.6.8
+# Version: 0.7.0
 
 import re
 import json
-import socket
 import urllib3
 import requests
 import argparse
 import tldextract
 import xmltodict
+import dns.resolver
 from enum import Enum
 from queue import Queue
+from random import choices
 from threading import Thread
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin
 
-HTTP_TIMEOUT = 7
+TIMEOUT = 7
 UserAgent = { 'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/77.0.3865.120 Safari/537.36" }
 
 googleCloud = {
@@ -100,10 +101,13 @@ class Bucket(object):
         else:
             self.state = State.UNKNOWN
             self.risk = Risk.MEDIUM
-            self.details.append('Response: {}'.format(response.status_code))
+            self.details.append(f'Response: {response.status_code}')
 
         if(len(response.history) != 0 and response.history[0].status_code in [301, 302]):
-            self.details.append('Redirect ' + response.url)
+            self.details.append(f'Redirect {response.url}')
+            if 'login' in response.url or 'signin' in response.url:
+                self.state = State.PRIVATE
+                self.risk = Risk.LOW
 
         self.get_rights()
 
@@ -115,55 +119,49 @@ class Bucket(object):
             print(json.dumps(self.acl, indent=4))
 
     def get_rights(self):
+        if self.cloud == 'azure':
+            self._azure_acl()
+            return
         if self.state != State.OPEN:
-            return False
+            return
         if self.cloud == 'google':
             self._google_acl()
         elif self.cloud == 'aws':
             self._aws_acl()
-        elif self.cloud == 'azure':
-            self._azure_acl()
 
     def _azure_acl(self):
-        # TODO Test
-        '''
-        from azure.storage.blob import BlobServiceClient, ContainerClient
-        
-        account = self.name
-
-        try:
-            #service = BlobServiceClient(account_url='https://{}.blob.core.windows.net'.format(account), credential='') # null session
-            service = BlobServiceClient(account_url='https://{}.blob.core.windows.net'.format(account)) # Anonymous
-            containers = list(service.list_containers())
-        except:
-            containers = []
-
-        if(containers):
-            self.risk = Risk.HIGH
-            self.details.append('Found containers: {}'.format(','.join([c.name for c in containers])))
-
-        if self.domain.startswith('http'):
-            u = urlparse(self.domain)
-            srv = u.path.split('/')[1:2]
-            blob = srv if srv else account
-
+        if 'file.core.windows.net' in self.domain:
             try:
-                #container = ContainerClient.from_connection_string(conn_str='DefaultEndpointsProtocol=https;AccountName={};AccountKey=;EndpointSuffix=core.windows.net'.format(account), container_name=blob)
-                container = ContainerClient.from_container_url('https://{}.blob.core.windows.net/{}'.format(account, blob)) # Anonymous
-                blobs = list(container.list_blobs())
+                response = requests.get(f'https://{self.domain}/?comp=list', allow_redirects=True, timeout=15, verify=False, headers=UserAgent)
+                if response.status_code == 200:
+                    self.risk = Risk.HIGH
+                    self.state = State.OPEN
+                    self.details.append(f'List Shares')
             except:
-                blobs = []
+                return
 
-            if(blobs):
+        if 'blob.core.windows.net' in self.domain:
+            COMMON_CONTAINERS = ['images', 'mycontainer', 'downloads', 'backup', 'backups', 'web', 'website', 'private', 'uploads', 'page', 'static', 'logs', 'admin']
+            COMMON_CONTAINERS.append(self.name)
+            if self.name != base_name:
+                COMMON_CONTAINERS.append(base_name)
+
+            findings = []
+            for container in COMMON_CONTAINERS:
+                try:
+                    response = requests.get(f'https://{self.domain}/{container}?restype=container&comp=list', allow_redirects=True, timeout=15, verify=False, headers=UserAgent)
+                    if response.status_code == 200:
+                        findings.append(container)
+                except:
+                    continue
+            if findings:
                 self.risk = Risk.HIGH
-                self.details.append('LIST')
-        '''
-        pass
+                self.state = State.OPEN
+                self.details.append(f'Containers: {",".join(findings)}')
 
     def _google_acl(self):
-        google_api = 'https://www.googleapis.com/storage/v1/b/{}/iam/testPermissions?permissions=storage.buckets.delete&permissions=storage.buckets.get&permissions=storage.buckets.getIamPolicy&permissions=storage.buckets.setIamPolicy&permissions=storage.buckets.update&permissions=storage.objects.create&permissions=storage.objects.delete&permissions=storage.objects.get&permissions=storage.objects.list&permissions=storage.objects.update'.format(
-            self.name)
-        remote_acl = requests.get(google_api, timeout=HTTP_TIMEOUT, verify=False, headers=UserAgent).json()
+        google_api = f'https://www.googleapis.com/storage/v1/b/{self.name}/iam/testPermissions?permissions=storage.buckets.delete&permissions=storage.buckets.get&permissions=storage.buckets.getIamPolicy&permissions=storage.buckets.setIamPolicy&permissions=storage.buckets.update&permissions=storage.objects.create&permissions=storage.objects.delete&permissions=storage.objects.get&permissions=storage.objects.list&permissions=storage.objects.update'
+        remote_acl = requests.get(google_api, timeout=TIMEOUT, verify=False, headers=UserAgent).json()
 
         if remote_acl.get('permissions'):
             self.acl = remote_acl['permissions']
@@ -183,11 +181,11 @@ class Bucket(object):
                 self.risk = Risk.HIGH
                 symb += 'V'
 
-            self.details.append('{} [{}]'.format(user, symb))
+            self.details.append(f'{user} [{symb}]')
 
     def _aws_acl(self):
         aws_api = f"https://{self.name}.s3.amazonaws.com/?acl"
-        remote_acl = requests.get(aws_api).text
+        remote_acl = requests.get(aws_api, timeout=TIMEOUT, verify=False, headers=UserAgent).text
         acl_dict = xmltodict.parse(remote_acl)
         if 'AccessControlPolicy' in acl_dict:
             acl_dict = acl_dict['AccessControlPolicy']['AccessControlList']
@@ -219,7 +217,7 @@ class Bucket(object):
                         rights[user] += symb
 
                 for user, symb in rights.items():
-                    self.details.append('{} [{}]'.format(user, symb))
+                    self.details.append(f'{user} [{symb}]')
 
 
 class HiddenGems(object):
@@ -290,7 +288,7 @@ class HiddenGems(object):
 			path = '/'.join(u.path.split('/')[:-1])
 		else:
 			path = u.path
-		return '{}://{}{}'.format(u.scheme, u.netloc, path)
+		return f'{u.scheme}://{u.netloc}{path}'
 
 	def filter_scope(self, values):
 		return [x for x in values if self.domain == urlparse(x).netloc]
@@ -300,10 +298,9 @@ class HiddenGems(object):
 			base_url = self.base_url
 		url = urlparse(urljoin(base_url, src))
 		if full_query and url.query:
-			query = '?' + url.query
+			return f'{url.scheme}://{url.netloc}{url.path}?{url.query}'
 		else:
-			query = ''
-		return '{}://{}{}{}'.format(url.scheme, url.netloc, url.path, query)
+			return f'{url.scheme}://{url.netloc}{url.path}'
 
 	def url_extension(self, url):
 		file = self.normalize_url(url).split('/')[-1]
@@ -392,24 +389,31 @@ def generate_permutations(base_name, dict_file):
 
     with open(dict_file, 'r') as f:
         lines = f.read().splitlines()
-        for affix in lines:
-            p += [x.format(affix, base_name) for x in rules]
-            p += [x.format(base_name, affix) for x in rules]
+
+    for affix in lines:
+        p += [x.format(affix, base_name) for x in rules]
+        p += [x.format(base_name, affix) for x in rules]
 
     return p
 
 
 def check_dns(hostname):
     try:
-        ip = socket.gethostbyname(hostname)
-        return False if ip in ['0.0.0.0', '127.0.0.1'] else True
-    except socket.error:
+        resolver = dns.resolver.Resolver(configure=False)
+        resolver.timeout = TIMEOUT
+        resolver.lifetime = TIMEOUT
+        resolver.nameservers = choices(dns_servers, k=2)
+        answer = resolver.query(hostname)
+        return True if answer else False
+    except:
         return False
+    finally:
+        del resolver
 
 
 def check_host(host):
     try:
-        response = requests.head('http://' + host, allow_redirects=True, timeout=HTTP_TIMEOUT, verify=False, headers=UserAgent)
+        response = requests.head(f'http://{host}', allow_redirects=True, timeout=TIMEOUT, verify=False, headers=UserAgent)
     except:
         return False
     if response.status_code in [404]:
@@ -423,7 +427,7 @@ def search_buckets(cloud_dict, names, cloud='generic'):
 
     for srv_name, srv_url in cloud_dict.items():
         for name in names:
-            domain = '{}.{}'.format(name, srv_url)
+            domain = f'{name}.{srv_url}'
             q.put((srv_name, domain, name))
 
     for w in range(num_threads):
@@ -443,7 +447,7 @@ def search_buckets_worker(q, results, cloud):
         name = work[2]
 
         if(verbose):
-            print('[d]   checking {}'.format(domain))
+            print(f'[d]   checking {domain}')
 
         if check_dns(domain):
             response = check_host(domain)
@@ -481,10 +485,10 @@ def what_cloud_worker(q, results):
         url = q.get()
 
         if(verbose):
-            print('[d]   checking {}'.format(url))
+            print(f'[d]   checking {url}')
 
         try:
-            response = requests.head(url, allow_redirects=True, timeout=HTTP_TIMEOUT, verify=False, headers=UserAgent)
+            response = requests.head(url, allow_redirects=True, timeout=TIMEOUT, verify=False, headers=UserAgent)
         except:
             q.task_done()
             continue
@@ -505,7 +509,7 @@ def what_cloud_worker(q, results):
             q.task_done()
             continue
 
-        srv_name = '{} Cloud'.format(cloud.capitalize())
+        srv_name = f'{cloud.capitalize()} Cloud'
         domain_name = tldextract.extract(url).domain
         u = urlparse(url)
         domain = u.netloc
@@ -536,7 +540,7 @@ def show_banner():
           / ____/ /___  __  ______/ / / / /_  ______  / /____  _____
          / /   / / __ \/ / / / __  / /_/ / / / / __ \/ __/ _ \/ ___/
         / /___/ / /_/ / /_/ / /_/ / __  / /_/ / / / / /_/  __/ /
-        \____/_/\____/\__,_/\__,_/_/ /_/\__,_/_/ /_/\__/\___/_/  v0.6.8
+        \____/_/\____/\__,_/\__,_/_/ /_/\__,_/_/ /_/\__/\___/_/  v0.7.0
         \n\033[0;0m'''
     print(banner)
 
@@ -545,7 +549,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='CloudHunter. Searches for AWS, Azure and Google cloud storage buckets.')
     parser.add_argument('input', metavar='input', type=str, nargs='+', help='Company name, url or any base name.')
     parser.add_argument('-p', '--permutations-file', metavar='file', type=str, default='permutations.txt', help='Permutations file.')
-    parser.add_argument('-t', '--threads', metavar='num', type=int, default=7, help='Threads.')
+    parser.add_argument('-r', '--resolvers', metavar='file', type=str, default='resolvers.txt', help='DNS resolvers file.')
+    parser.add_argument('-t', '--threads', metavar='num', type=int, default=10, help='Threads.')
     parser.add_argument('-c', '--crawl-deep', metavar='num', type=int, default=1, help='How many pages to crawl after the first.')
     parser.add_argument('-b', '--base-only',  action='store_true', help='Checks only the base name, skips permutations generation.')
     parser.add_argument('-d', '--disable-bruteforce',  action='store_true', help='Disable discovery by brute force.')
@@ -557,18 +562,20 @@ if __name__ == '__main__':
     num_threads = min(300, args.threads)
     show_open_only = args.open_only
     verbose = args.verbose
+    with open(args.resolvers, 'r', encoding='utf-8') as f:
+        dns_servers = f.read().splitlines()
     results = []
 
     if args.input[0].startswith('http'):
         url = args.input[0].strip().lower()
         base_name = tldextract.extract(url).domain
 
-        print('[>] Crawling {} ...'.format(url))
+        print(f'[>] Crawling {url} ...')
         urls = [url]
         c = HiddenGems(url, args.crawl_deep)
         urls += c.list_out_dirs()
 
-        print('[>] {} possible endpoints found'.format(len(urls)))
+        print(f'[>] {len(urls)} possible endpoints found')
         results += what_cloud(urls)
 
     else:
@@ -583,8 +590,8 @@ if __name__ == '__main__':
         permutations = generate_permutations(base_name, args.permutations_file)
 
     srv_len = len(azureCloud) + len(googleCloud) + len(awsCloud)
-    print('[>] Bruteforce {} name permutations.'.format(len(permutations)))
-    print('[>] {} tries, be patient.\n'.format(len(permutations) * srv_len))
+    print(f'[>] Bruteforce {len(permutations)} name permutations.')
+    print(f'[>] {len(permutations) * srv_len} tries, be patient.\n')
 
     print('\n[+] Check Google Cloud')
     results += search_buckets(googleCloud, permutations, 'google')
@@ -595,4 +602,16 @@ if __name__ == '__main__':
     print('\n[+] Check Azure Cloud')
     results += search_buckets(azureCloud, permutations, 'azure')
 
-    # TODO save results to a json report
+    out = []
+    for item in results:
+        out.append({
+            'cloud': item.cloud,
+            'name': item.name,
+            'domain': item.domain,
+            'state': item.state.value,
+            'risk': item.risk.name,
+            'details': item.details
+        })
+
+    with open(f'{base_name}-output.json', 'w', encoding='utf-8') as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
