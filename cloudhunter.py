@@ -595,10 +595,10 @@ if __name__ == '__main__':
     print(f'[>] {len(permutations) * srv_len} tries, be patient.\n')
 
     print('\n[+] Check Google Cloud')
-    #results += search_buckets(googleCloud, permutations, 'google')
+    results += search_buckets(googleCloud, permutations, 'google')
 
     print('\n[+] Check Amazon Cloud')
-    #results += search_buckets(awsCloud, permutations, 'aws')
+    results += search_buckets(awsCloud, permutations, 'aws')
 
     print('\n[+] Check Azure Cloud')
     results += search_buckets(azureCloud, permutations, 'azure')
