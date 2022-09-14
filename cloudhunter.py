@@ -89,7 +89,8 @@ class Bucket(object):
         if response.status_code == 200:
             self.state = State.OPEN
             self.risk = Risk.MEDIUM
-            if 'application/xml' in response.headers['Content-Type']:
+            content_type = response.headers.get('Content-Type', None)
+            if content_type and 'application/xml' in content_type:
                 self.risk = Risk.HIGH
                 self.details.append('LIST')
         elif response.status_code in [400, 401, 403]:
@@ -315,7 +316,7 @@ class HiddenGems(object):
 			for url in url_list:
 				if url.startswith('http'):
 					result.append(url)
-		
+
 		for child in self.childs:
 			result += child.list_urls(scope)
 
@@ -594,10 +595,10 @@ if __name__ == '__main__':
     print(f'[>] {len(permutations) * srv_len} tries, be patient.\n')
 
     print('\n[+] Check Google Cloud')
-    results += search_buckets(googleCloud, permutations, 'google')
+    #results += search_buckets(googleCloud, permutations, 'google')
 
     print('\n[+] Check Amazon Cloud')
-    results += search_buckets(awsCloud, permutations, 'aws')
+    #results += search_buckets(awsCloud, permutations, 'aws')
 
     print('\n[+] Check Azure Cloud')
     results += search_buckets(azureCloud, permutations, 'azure')
