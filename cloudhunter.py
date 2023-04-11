@@ -404,7 +404,7 @@ def check_dns(hostname):
         resolver.timeout = TIMEOUT
         resolver.lifetime = TIMEOUT
         resolver.nameservers = choices(dns_servers, k=2)
-        answer = resolver.query(hostname)
+        answer = resolver.resolve(hostname)
         return True if answer else False
     except:
         return False
@@ -433,7 +433,7 @@ def search_buckets(cloud_dict, names, cloud='generic'):
 
     for w in range(num_threads):
         worker = Thread(target=search_buckets_worker, args=(q, results, cloud))
-        worker.setDaemon(True)
+        worker.daemon = True
         worker.start()
 
     q.join()
@@ -474,7 +474,7 @@ def what_cloud(urls):
 
     for w in range(num_threads):
         worker = Thread(target=what_cloud_worker, args=(q, results))
-        worker.setDaemon(True)
+        worker.daemon = True
         worker.start()
 
     q.join()
