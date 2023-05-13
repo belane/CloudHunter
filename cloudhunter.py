@@ -166,10 +166,10 @@ class Bucket(object):
             try:
                 delete_test = requests.delete(f'https://{self.domain}/{proof}', timeout=TIMEOUT, verify=False, headers=USER_AGENT)
             except:
-                print(f'[d]   Error deleting proof: {self.domain} {proof}')
+                print(f'[e]   Error deleting proof: {self.domain} {proof}')
                 return
             if not delete_test.ok:
-                print(f'[d]   Error deleting proof: {self.domain} {proof}')
+                print(f'[e]   Error deleting proof: {self.domain} {proof}')
 
     def get_rights(self):
         if self.cloud == 'azure':
@@ -563,8 +563,8 @@ def search_buckets_worker(queue, results, cloud, enable_write):
         domain = work[1]
         name = work[2]
 
-        # if(verbose):
-        #     print(f'[d]   checking {domain}')
+        if(verbose):
+            print(f'[d]   checking {domain}')
 
         ip = check_dns(domain)
         if ip:
@@ -666,17 +666,17 @@ def show_banner():
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='CloudHunter. Searches for AWS, Azure and Google cloud storage buckets.')
+    parser = argparse.ArgumentParser(description='CloudHunter. Searches for AWS, Azure, Alibaba and Google cloud storage buckets.')
     parser.add_argument('input', metavar='input', type=str, nargs='+', help='Company name, url or any base name.')
     parser.add_argument('-p', '--permutations-file', metavar='file', type=str, default='permutations.txt', help='Permutations file.')
-    parser.add_argument('-s', '--services', metavar='aws,google,azure,alibaba', default='aws,google,azure,alibaba', help='specifies target services.')
+    parser.add_argument('-s', '--services', metavar='aws,google,azure,alibaba', default='aws,google,azure,alibaba', help='Specifies target services.')
     parser.add_argument('-w', '--write-test',  action='store_true', help='Enable write test to read rights when other methods fail.')
     parser.add_argument('-r', '--resolvers', metavar='file', type=str, default='resolvers.txt', help='DNS resolvers file.')
     parser.add_argument('-t', '--threads', metavar='num', type=int, default=10, help='Threads.')
     parser.add_argument('-c', '--crawl-deep', metavar='num', type=int, default=1, help='How many pages to crawl after the first.')
     parser.add_argument('-b', '--base-only',  action='store_true', help='Checks only the base name, skips permutations generation.')
     parser.add_argument('-d', '--disable-bruteforce',  action='store_true', help='Disable discovery by brute force.')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose log')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose log.')
     parser.add_argument('-o', '--open-only', action='store_true', help='Show only open buckets.')
     args = parser.parse_args()
     args.services = args.services.split(',')
@@ -737,6 +737,6 @@ if __name__ == '__main__':
         'risk': item.risk.name,
         'details': item.details
     } for item in results]
-    
+
     with open(f'{base_name}-output.json', 'w', encoding='utf-8') as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
