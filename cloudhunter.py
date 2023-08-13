@@ -674,6 +674,7 @@ if __name__ == '__main__':
     parser.add_argument('-r', '--resolvers', metavar='file', type=str, default='resolvers.txt', help='DNS resolvers file.')
     parser.add_argument('-t', '--threads', metavar='num', type=int, default=10, help='Threads.')
     parser.add_argument('-c', '--crawl-deep', metavar='num', type=int, default=1, help='How many pages to crawl after the first.')
+    parser.add_argument('-of', '--output', metavar='file', type=str, default=None, help='Output file name. If not provided - file name will be generated.')
     parser.add_argument('-b', '--base-only',  action='store_true', help='Checks only the base name, skips permutations generation.')
     parser.add_argument('-d', '--disable-bruteforce',  action='store_true', help='Disable discovery by brute force.')
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose log.')
@@ -738,5 +739,6 @@ if __name__ == '__main__':
         'details': item.details
     } for item in results]
 
-    with open(f'{base_name}-output.json', 'w', encoding='utf-8') as f:
+    output_file = args.output or f'{base_name}-output.json'
+    with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
